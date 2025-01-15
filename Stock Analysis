@@ -1,0 +1,141 @@
+# Import libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+import yfinance as yf
+
+
+
+
+# Step 1: Fetch Stock Price Data
+def fetch_stock_data(ticker, start_date, end_date):
+    """
+    Fetch historical stock price data from Yahoo Finance.
+    Args:
+        ticker (str): Stock symbol (e.g., 'AAPL').
+        start_date (str): Start date in 'YYYY-MM-DD' format.
+        end_date (str): End date in 'YYYY-MM-DD' format.
+    Returns:
+        pd.DataFrame: Historical stock price data.
+    """
+    stock_data = yf.download(ticker, start=start_date, end=end_date)
+    return stock_data
+
+# Fetch data for a stock
+ticker = 'ETHA'
+start_date = '2024-10-15'
+end_date = '2024-12-07'
+data = fetch_stock_data(ticker, start_date, end_date)
+
+# Step 2: Exploratory Data Analysis (EDA)
+print("Dataset Overview:")
+print(data.head())
+print("\nDataset Info:")
+print(data.info())
+
+# Visualize the closing price
+plt.figure(figsize=(10, 6))
+plt.plot(data['Close'], label='Closing Price')
+plt.title(f'{ticker} Closing Price')
+plt.xlabel('Date')
+plt.ylabel('Price')
+plt.legend()
+plt.show()
+
+# Check correlation between features
+corr = data[['Open', 'High', 'Low', 'Close', 'Volume']].corr()
+plt.figure(figsize=(8, 6))
+sns.heatmap(corr, annot=True, cmap='coolwarm')
+plt.title('Feature Correlation')
+plt.show()
+
+# Step 3: Data Preprocessing
+# Drop missing values
+data = data.dropna()
+
+# Scale the 'Close' column
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled_close = scaler.fit_transform(data['Close'].values.reshape(-1, 1))
+
+# Create sequences for LSTM
+def create_sequences(data, seq_length):
+    """
+    Create sequences for LSTM training.
+    Args:
+        data (np.array): Scaled data.
+        seq_length (int): Length of each sequence.
+    Returns:
+        X (np.array): Features for LSTM.
+        y (np.array): Targets for LSTM.
+    """
+    X, y = [], []
+    for i in range(len(data) - seq_length):
+        X.append(data[i:i+seq_length])
+        y.append(data[i+seq_length])
+    return np.array(X), np.array(y)
+
+seq_length = 10  # Sequence length (e.g., last 10 days)
+X, y = create_sequences(scaled_close, seq_length)
+
+# Split data into training and testing sets
+train_size = int(len(X) * 0.8)
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+
+# Step 4: Build and Train LSTM Model
+# Define the LSTM model
+model = Sequential([
+    LSTM(50, return_sequences=True, input_shape=(X_train.shape[1], 1)),
+    Dropout(0.2),
+    LSTM(50, return_sequences=False),
+    Dropout(0.2),
+    Dense(1)
+])
+
+model.compile(optimizer='adam', loss='mean_squared_error')
+
+# Train the model
+model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_test, y_test))
+
+# Step 5: Predict Future Prices
+def predict_future(model, current_sequence, steps, scaler):
+    """
+    Predict future prices using an LSTM model.
+    Args:
+        model: Trained LSTM model.
+        current_sequence (np.array): Last known sequence to start predictions.
+        steps (int): Number of future steps to predict.
+        scaler: Scaler used to transform the data.
+    Returns:
+        np.array: Predicted future prices.
+    """
+    predictions = []
+    for _ in range(steps):
+        pred = model.predict(current_sequence[np.newaxis, :, :])
+        predictions.append(pred[0, 0])
+        current_sequence = np.append(current_sequence[1:], pred).reshape(-1, 1)
+    return scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
+
+# Predict next 5 days
+future_steps = 5
+current_sequence = X_test[-1]  # Use the last test sequence
+future_prices = predict_future(model, current_sequence, future_steps, scaler)
+
+print("Predicted Future Prices:", future_prices.flatten())
+
+# Step 6: Visualize Results
+# Visualize actual vs future predicted prices
+plt.figure(figsize=(10, 6))
+plt.plot(range(len(y_test)), scaler.inverse_transform(y_test), label='Actual Prices')
+plt.plot(range(len(y_test), len(y_test) + future_steps), future_prices, label='Future Predictions')
+plt.title(f'{ticker} Actual vs Predicted Future Prices')
+plt.xlabel('Days')
+plt.ylabel('Price')
+plt.legend()
+plt.show()
