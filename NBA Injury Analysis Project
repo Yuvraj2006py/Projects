@@ -1,0 +1,111 @@
+import streamlit as st
+import pandas as pd
+import datetime
+import matplotlib.pyplot as plt
+from nba_api.stats.static import players
+from nba_api.stats.endpoints import PlayerGameLog
+
+
+
+# Function to get a player's ID
+def get_player_id(player_name):
+    player_dict = players.get_players()
+    for player in player_dict:
+        if player["full_name"].lower() == player_name.lower():
+            return player["id"]
+    return None
+
+# Function to get player stats for a given season range
+def get_player_stats(player_id, seasons):
+    all_stats = []
+    for season in seasons:
+        try:
+            log = PlayerGameLog(player_id=player_id, season=season)
+            df = log.get_data_frames()[0]
+            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+            df["SEASON"] = season  # Add season column
+            all_stats.append(df)
+        except Exception as e:
+            print(f"Error fetching data for season {season}: {e}")
+    return pd.concat(all_stats, ignore_index=True) if all_stats else pd.DataFrame()
+
+
+
+st.title("NBA Player Injury Analysis")
+
+# User input for player name
+player_name = st.text_input("Enter NBA Player Name (e.g., Derrick Rose)", "Derrick Rose")
+
+# Select Injury Date
+injury_date = st.date_input("Select Injury Date", datetime.date(2012, 4, 28))
+
+# Select Number of Games Before & After Injury
+num_games = st.slider("Number of Games Before & After Injury", 1, 20, 10)
+
+# Fetch Player ID
+player_id = get_player_id(player_name)
+
+if player_id:
+    st.success(f"Found Player: {player_name}")
+
+    # Define seasons based on player's career
+    start_year = 2010
+    end_year = 2020
+    seasons = [f"{year}-{str(year+1)[-2:]}" for year in range(start_year, end_year)]
+
+    # Get player game logs
+    stats_df = get_player_stats(player_id, seasons)
+
+    if not stats_df.empty:
+        # Convert injury date to datetime
+        injury_date = pd.to_datetime(injury_date)
+
+        # Get pre-injury & post-injury data
+        pre_injury = stats_df[stats_df["GAME_DATE"] < injury_date].tail(num_games)
+        post_injury = stats_df[stats_df["GAME_DATE"] > injury_date].head(num_games)
+
+        # Compute average stats
+        pre_avg = pre_injury[["PTS", "AST", "REB", "FG_PCT"]].mean()
+        post_avg = post_injury[["PTS", "AST", "REB", "FG_PCT"]].mean()
+
+        # Display DataFrames
+        st.subheader("Pre-Injury Games")
+        st.write(pre_injury[["GAME_DATE", "PTS", "AST", "REB", "FG_PCT"]])
+
+        st.subheader("Post-Injury Games")
+        st.write(post_injury[["GAME_DATE", "PTS", "AST", "REB", "FG_PCT"]])
+
+        # Display Comparison
+        comparison = pd.DataFrame({"Pre-Injury": pre_avg, "Post-Injury": post_avg})
+        st.subheader("Pre-Injury vs. Post-Injury Averages")
+        st.dataframe(comparison)
+
+        # Plot Comparison
+        st.subheader("Impact of Injury on Performance")
+        fig, ax = plt.subplots(figsize=(8, 5))
+        comparison.plot(kind="bar", colormap="coolwarm", ax=ax)
+        plt.title(f"Impact of Injury on {player_name}'s Performance")
+        plt.ylabel("Average Stat Value")
+        plt.xticks(rotation=0)
+        plt.grid(axis="y", linestyle="--", alpha=0.5)
+        st.pyplot(fig)
+
+        # Points Per Game Line Chart
+        st.subheader("Points Per Game Before & After Injury")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(pre_injury["GAME_DATE"], pre_injury["PTS"], label="Pre-Injury", marker="o", linestyle="dashed", color="blue")
+        ax.plot(post_injury["GAME_DATE"], post_injury["PTS"], label="Post-Injury", marker="o", linestyle="dashed", color="red")
+        plt.xlabel("Game Date")
+        plt.ylabel("Points Per Game")
+        plt.legend()
+        plt.xticks(rotation=45)
+        plt.grid(True, linestyle="--", alpha=0.5)
+        st.pyplot(fig)
+
+    else:
+        st.error(" No data found for this player in the selected time frame.")
+
+else:
+    st.error(" Player not found. Please check the spelling and try again.")
+
+# Run the app using: streamlit run filename.py in terminal
